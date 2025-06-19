@@ -14,6 +14,8 @@ A Model Context Protocol (MCP) server that enables secure interaction with Micro
 - Secure database access through environment variables
 - Comprehensive logging
 - Automatic system dependency installation
+- **Azure SQL Support**: Enhanced support for Azure SQL Database and Managed Instance
+- **Multiple Driver Options**: Both pymssql and pyodbc drivers supported
 
 ## Installation
 
@@ -32,6 +34,30 @@ MSSQL_SERVER=localhost
 MSSQL_USER=your_username
 MSSQL_PASSWORD=your_password
 MSSQL_DATABASE=your_database
+```
+
+### Azure SQL Database / Managed Instance
+
+For Azure SQL, use the full server name with port:
+
+```bash
+MSSQL_SERVER=your-server.database.windows.net,1433
+MSSQL_USER=your_username
+MSSQL_PASSWORD=your_password
+MSSQL_DATABASE=your_database
+```
+
+### Driver Selection
+
+This server supports both `pymssql` and `pyodbc` drivers:
+
+- **pymssql** (default): Lighter weight, good for basic SQL Server connections
+- **pyodbc**: Better Azure SQL support, more robust for cloud scenarios
+
+For Azure SQL Database or Managed Instance, use the pyodbc version:
+
+```bash
+python src/mssql_mcp_server/server_pyodbc.py
 ```
 
 ## Usage
