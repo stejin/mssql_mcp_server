@@ -164,6 +164,9 @@ cython_debug/
 # Test connection files with credentials
 test_connection.py
 test_correct_connection.py
+quick_test.py
+test_mcp_tools.py
+debug_*.py
 
 # Virtual environment
 .venv/

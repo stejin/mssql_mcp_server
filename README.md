@@ -16,6 +16,12 @@ A Model Context Protocol (MCP) server that enables secure interaction with Micro
 - Automatic system dependency installation
 - **Azure SQL Support**: Enhanced support for Azure SQL Database and Managed Instance
 - **Multiple Driver Options**: Both pymssql and pyodbc drivers supported
+- **Microsoft Entra ID Authentication**: Complete support for modern Azure authentication methods
+  - Service Principal authentication
+  - Managed Identity authentication (system and user-assigned)
+  - Integrated authentication
+  - Password authentication
+  - Interactive/Default authentication with automatic token handling
 
 ## Installation
 
@@ -59,6 +65,118 @@ For Azure SQL Database or Managed Instance, use the pyodbc version:
 ```bash
 python src/mssql_mcp_server/server_pyodbc.py
 ```
+
+## Microsoft Entra ID Authentication
+
+The enhanced server (`server_enhanced.py`) supports multiple Microsoft Entra ID authentication methods for Azure SQL Database and Managed Instance.
+
+### Installation
+
+Install additional dependencies for Entra ID support:
+
+```bash
+pip install azure-identity azure-core pyodbc
+```
+
+### Authentication Methods
+
+#### 1. Service Principal Authentication
+
+Recommended for applications and automation:
+
+```bash
+export MSSQL_AUTH_METHOD="entra_service_principal"
+export MSSQL_SERVER="your-server.database.windows.net,1433"
+export MSSQL_CLIENT_ID="your-app-client-id"
+export MSSQL_CLIENT_SECRET="your-app-client-secret"
+export MSSQL_DATABASE="your_database"
+```
+
+#### 2. Managed Identity Authentication
+
+For Azure VMs, Container Instances, App Service:
+
+```bash
+# System-assigned managed identity
+export MSSQL_AUTH_METHOD="entra_managed_identity"
+export MSSQL_SERVER="your-server.database.windows.net,1433"
+export MSSQL_DATABASE="your_database"
+
+# User-assigned managed identity
+export MSSQL_AUTH_METHOD="entra_managed_identity"
+export MSSQL_CLIENT_ID="user-assigned-identity-client-id"
+export MSSQL_SERVER="your-server.database.windows.net,1433"
+export MSSQL_DATABASE="your_database"
+```
+
+#### 3. Interactive/Default Authentication
+
+Uses DefaultAzureCredential chain (recommended for development):
+
+```bash
+export MSSQL_AUTH_METHOD="entra_interactive"
+export MSSQL_SERVER="your-server.database.windows.net,1433"
+export MSSQL_DATABASE="your_database"
+```
+
+#### 4. Entra ID Password Authentication
+
+For user credentials with Entra ID:
+
+```bash
+export MSSQL_AUTH_METHOD="entra_password"
+export MSSQL_SERVER="your-server.database.windows.net,1433"
+export MSSQL_USER="user@yourdomain.com"
+export MSSQL_PASSWORD="your_entra_password"
+export MSSQL_DATABASE="your_database"
+```
+
+#### 5. Integrated Authentication
+
+For domain-joined Windows machines:
+
+```bash
+export MSSQL_AUTH_METHOD="entra_integrated"
+export MSSQL_SERVER="your-server.database.windows.net,1433"
+export MSSQL_DATABASE="your_database"
+```
+
+### Using Enhanced Server
+
+```bash
+# Run the enhanced server with Entra ID support
+python src/mssql_mcp_server/server_enhanced.py
+```
+
+### Claude Desktop Configuration for Entra ID
+
+```json
+{
+  "mcpServers": {
+    "mssql": {
+      "command": "python",
+      "args": ["src/mssql_mcp_server/server_enhanced.py"],
+      "env": {
+        "MSSQL_AUTH_METHOD": "entra_service_principal",
+        "MSSQL_SERVER": "your-server.database.windows.net,1433",
+        "MSSQL_CLIENT_ID": "your-app-client-id",
+        "MSSQL_CLIENT_SECRET": "your-app-client-secret",
+        "MSSQL_DATABASE": "your_database"
+      }
+    }
+  }
+}
+```
+
+### Testing Authentication
+
+Test all authentication methods:
+
+```bash
+python test_entra_auth.py
+```
+
+See [examples/entra_id_configs.md](examples/entra_id_configs.md) for complete configuration examples.
 
 ## Usage
 
