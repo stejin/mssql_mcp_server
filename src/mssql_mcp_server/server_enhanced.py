@@ -2,6 +2,9 @@ import asyncio
 import logging
 import os
 import struct
+import json
+import time
+from pathlib import Path
 from typing import Optional, Dict, Any
 import pyodbc
 from mcp.server import Server
@@ -188,15 +191,130 @@ Connection Timeout={config["connection_timeout"]};'''
     
     return pyodbc.connect(conn_string)
 
+# Token cache file location
+TOKEN_CACHE_DIR = Path.home() / ".mcp_mssql_cache"
+TOKEN_CACHE_FILE = TOKEN_CACHE_DIR / "token_cache.json"
+
+class TokenCache:
+    """Manages caching of access tokens to avoid repeated authentication."""
+    
+    @staticmethod
+    def _ensure_cache_dir():
+        """Ensure the cache directory exists."""
+        TOKEN_CACHE_DIR.mkdir(exist_ok=True, mode=0o700)  # Only user can read/write
+    
+    @staticmethod
+    def save_token(token_data: dict, config: Dict[str, Any]):
+        """Save token to cache with metadata."""
+        try:
+            TokenCache._ensure_cache_dir()
+            
+            cache_data = {
+                "token": token_data["token"],
+                "expires_on": token_data["expires_on"],
+                "server": config["server"],
+                "database": config["database"],
+                "cached_at": time.time()
+            }
+            
+            with open(TOKEN_CACHE_FILE, 'w', encoding='utf-8') as f:
+                json.dump(cache_data, f, indent=2)
+            
+            # Set file permissions to be readable only by user
+            os.chmod(TOKEN_CACHE_FILE, 0o600)
+            logger.debug(f"Token cached successfully")
+            
+        except Exception as e:
+            logger.warning(f"Failed to cache token: {e}")
+    
+    @staticmethod
+    def load_token(config: Dict[str, Any]) -> Optional[dict]:
+        """Load token from cache if valid and not expired."""
+        try:
+            if not TOKEN_CACHE_FILE.exists():
+                logger.debug("No token cache file found")
+                return None
+            
+            with open(TOKEN_CACHE_FILE, 'r', encoding='utf-8') as f:
+                cache_data = json.load(f)
+            
+            # Check if cached token is for the same server/database
+            if (cache_data.get("server") != config["server"] or 
+                cache_data.get("database") != config["database"]):
+                logger.debug("Cached token is for different server/database")
+                return None
+            
+            # Check if token is expired (with 5 minute buffer)
+            expires_on = cache_data.get("expires_on", 0)
+            current_time = time.time()
+            buffer_seconds = 300  # 5 minutes
+            
+            if current_time >= (expires_on - buffer_seconds):
+                logger.debug("Cached token is expired or about to expire")
+                return None
+            
+            expires_in = expires_on - current_time
+            logger.info(f"✅ Using cached token (expires in {int(expires_in/60)} minutes)")
+            
+            return {
+                "token": cache_data["token"],
+                "expires_on": cache_data["expires_on"]
+            }
+            
+        except Exception as e:
+            logger.warning(f"Failed to load cached token: {e}")
+            return None
+    
+    @staticmethod
+    def clear_cache():
+        """Clear the token cache."""
+        try:
+            if TOKEN_CACHE_FILE.exists():
+                TOKEN_CACHE_FILE.unlink()
+                logger.debug("Token cache cleared")
+        except Exception as e:
+            logger.warning(f"Failed to clear token cache: {e}")
+
 def get_entra_interactive_connection(config: Dict[str, Any]) -> pyodbc.Connection:
-    """Create connection using Entra ID Interactive Authentication with access token."""
+    """Create connection using Entra ID Interactive Authentication with cached access token."""
     if not AZURE_AUTH_AVAILABLE:
         raise ImportError("Azure authentication libraries not available. Install azure-identity.")
     
+    # First, try to use cached token
+    cached_token = TokenCache.load_token(config)
+    if cached_token:
+        try:
+            # Use cached token
+            token_bytes = cached_token["token"].encode("UTF-16-LE")
+            token_struct = struct.pack(f'<I{len(token_bytes)}s', len(token_bytes), token_bytes)
+            
+            conn_string = f'''DRIVER={{ODBC Driver 17 for SQL Server}};
+SERVER={config["server"]};
+DATABASE={config["database"]};
+Encrypt={"yes" if config["encrypt"] else "no"};
+TrustServerCertificate={"yes" if config["trust_server_certificate"] else "no"};
+Connection Timeout={config["connection_timeout"]};'''
+            
+            logger.info(f"Connecting to {config['server']}/{config['database']}")
+            return pyodbc.connect(conn_string, attrs_before={1256: token_struct})  # SQL_COPT_SS_ACCESS_TOKEN
+            
+        except Exception as e:
+            logger.warning(f"Failed to connect with cached token: {e}. Will re-authenticate.")
+            TokenCache.clear_cache()  # Clear invalid token
+    
+    # No cached token or cached token failed, authenticate fresh
     try:
-        # Get access token using DefaultAzureCredential (supports multiple auth flows)
+        # Try DefaultAzureCredential first (if Azure CLI is available)
+        logger.info("Attempting authentication with DefaultAzureCredential...")
         credential = DefaultAzureCredential()
-        token = credential.get_token("https://database.windows.net/")
+        token = credential.get_token("https://database.windows.net/.default")
+        
+        # Cache the new token
+        token_data = {
+            "token": token.token,
+            "expires_on": token.expires_on
+        }
+        TokenCache.save_token(token_data, config)
         
         # Convert token to the format expected by pyodbc
         token_bytes = token.token.encode("UTF-16-LE")
@@ -209,12 +327,49 @@ Encrypt={"yes" if config["encrypt"] else "no"};
 TrustServerCertificate={"yes" if config["trust_server_certificate"] else "no"};
 Connection Timeout={config["connection_timeout"]};'''
         
-        logger.info(f"Connecting with Entra ID Interactive/Default Authentication to {config['server']}/{config['database']}")
+        logger.info(f"✅ Successfully authenticated with DefaultAzureCredential")
+        logger.info(f"Connecting to {config['server']}/{config['database']}")
         return pyodbc.connect(conn_string, attrs_before={1256: token_struct})  # SQL_COPT_SS_ACCESS_TOKEN
         
     except Exception as e:
-        logger.error(f"Failed to authenticate with DefaultAzureCredential: {e}")
-        raise
+        logger.error(f"DefaultAzureCredential failed: {e}")
+        logger.info("Falling back to InteractiveBrowserCredential...")
+        
+        try:
+            # Fallback to InteractiveBrowserCredential (opens browser)
+            from azure.identity import InteractiveBrowserCredential
+            
+            credential = InteractiveBrowserCredential(
+                redirect_uri="http://localhost:8400"  # Default redirect for Azure CLI
+            )
+            logger.info("🌐 Opening browser for authentication...")
+            token = credential.get_token("https://database.windows.net/.default")
+            
+            # Cache the new token
+            token_data = {
+                "token": token.token,
+                "expires_on": token.expires_on
+            }
+            TokenCache.save_token(token_data, config)
+            
+            # Convert token to the format expected by pyodbc
+            token_bytes = token.token.encode("UTF-16-LE")
+            token_struct = struct.pack(f'<I{len(token_bytes)}s', len(token_bytes), token_bytes)
+            
+            conn_string = f'''DRIVER={{ODBC Driver 17 for SQL Server}};
+SERVER={config["server"]};
+DATABASE={config["database"]};
+Encrypt={"yes" if config["encrypt"] else "no"};
+TrustServerCertificate={"yes" if config["trust_server_certificate"] else "no"};
+Connection Timeout={config["connection_timeout"]};'''
+            
+            logger.info(f"✅ Successfully authenticated with InteractiveBrowserCredential")
+            logger.info(f"Connecting to {config['server']}/{config['database']}")
+            return pyodbc.connect(conn_string, attrs_before={1256: token_struct})  # SQL_COPT_SS_ACCESS_TOKEN
+            
+        except Exception as browser_e:
+            logger.error(f"InteractiveBrowserCredential also failed: {browser_e}")
+            raise
 
 def get_connection() -> pyodbc.Connection:
     """Create database connection based on configured authentication method."""
@@ -244,11 +399,39 @@ def get_connection() -> pyodbc.Connection:
 # Initialize server
 app = Server("mssql_mcp_server_enhanced")
 
+# Global connection cache
+_cached_connection = None
+_connection_lock = asyncio.Lock()
+
+async def get_cached_connection() -> pyodbc.Connection:
+    """Get cached database connection, creating one if needed."""
+    global _cached_connection
+    
+    async with _connection_lock:
+        # Check if existing connection is still valid
+        if _cached_connection:
+            try:
+                # Test the connection with a simple query
+                cursor = _cached_connection.cursor()
+                cursor.execute("SELECT 1")
+                cursor.fetchone()
+                cursor.close()
+                logger.debug("Using cached database connection")
+                return _cached_connection
+            except Exception as e:
+                logger.warning(f"Cached connection is invalid: {e}. Creating new connection.")
+                _cached_connection = None
+        
+        # Create new connection
+        logger.info("Creating new database connection...")
+        _cached_connection = get_connection()
+        return _cached_connection
+
 @app.list_resources()
 async def list_resources() -> list[Resource]:
     """List SQL Server tables as resources."""
     try:
-        conn = get_connection()
+        conn = await get_cached_connection()
         cursor = conn.cursor()
         # Query to get user tables from the current database
         cursor.execute("""
@@ -271,7 +454,6 @@ async def list_resources() -> list[Resource]:
                 )
             )
         cursor.close()
-        conn.close()
         return resources
     except Exception as e:
         logger.error(f"Failed to list resources: {str(e)}")
@@ -290,7 +472,7 @@ async def read_resource(uri: AnyUrl) -> str:
     table = parts[0]
     
     try:
-        conn = get_connection()
+        conn = await get_cached_connection()
         cursor = conn.cursor()
         # Use TOP 100 for MSSQL (equivalent to LIMIT in MySQL)
         cursor.execute(f"SELECT TOP 100 * FROM [{table}]")
@@ -304,7 +486,6 @@ async def read_resource(uri: AnyUrl) -> str:
             result.append(row_str)
         
         cursor.close()
-        conn.close()
         return "\n".join([",".join(columns)] + result)
                 
     except Exception as e:
@@ -338,8 +519,22 @@ async def list_tools() -> list[Tool]:
                 "properties": {},
                 "required": []
             }
+        ),
+        Tool(
+            name="clear_token_cache",
+            description="Clear the cached authentication token to force fresh authentication on next request",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
         )
     ]
+
+@app.list_prompts()
+async def list_prompts() -> list:
+    """List available prompts. Currently no prompts are provided."""
+    return []
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
@@ -349,7 +544,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "get_auth_info":
         try:
             config = get_db_config()
-            conn = get_connection()
+            conn = await get_cached_connection()
             cursor = conn.cursor()
             
             # Get connection and authentication info
@@ -367,12 +562,19 @@ Azure Auth Available: {AZURE_AUTH_AVAILABLE}
 SQL Server Version: {result[0][:100] if result else 'Unknown'}..."""
             
             cursor.close()
-            conn.close()
             return [TextContent(type="text", text=auth_info)]
             
         except Exception as e:
             logger.error(f"Error getting auth info: {e}")
             return [TextContent(type="text", text=f"Error getting authentication info: {str(e)}")]
+    
+    elif name == "clear_token_cache":
+        try:
+            TokenCache.clear_cache()
+            return [TextContent(type="text", text="✅ Token cache cleared successfully. Next database operation will require fresh authentication.")]
+        except Exception as e:
+            logger.error(f"Error clearing token cache: {e}")
+            return [TextContent(type="text", text=f"Error clearing token cache: {str(e)}")]
     
     elif name == "execute_sql":
         query = arguments.get("query")
@@ -380,7 +582,7 @@ SQL Server Version: {result[0][:100] if result else 'Unknown'}..."""
             raise ValueError("Query is required")
         
         try:
-            conn = get_connection()
+            conn = await get_cached_connection()
             cursor = conn.cursor()
             cursor.execute(query)
             
@@ -394,7 +596,6 @@ SQL Server Version: {result[0][:100] if result else 'Unknown'}..."""
                     result = ["Tables_in_" + config["database"]]  # Header
                     result.extend([str(table[0]) for table in tables])  # Ensure string conversion
                     cursor.close()
-                    conn.close()
                     return [TextContent(type="text", text="\n".join(result))]
                 # For other INFORMATION_SCHEMA.TABLES queries (like COUNT), fall through to regular SELECT handling
             
@@ -419,11 +620,9 @@ SQL Server Version: {result[0][:100] if result else 'Unknown'}..."""
                         result_lines.append(",".join(row_values))
                     
                     cursor.close()
-                    conn.close()
                     return [TextContent(type="text", text="\n".join(result_lines))]
                 else:
                     cursor.close()
-                    conn.close()
                     return [TextContent(type="text", text="Query executed successfully (no results returned)")]
             
             # Non-SELECT queries
@@ -431,7 +630,6 @@ SQL Server Version: {result[0][:100] if result else 'Unknown'}..."""
                 conn.commit()
                 affected_rows = cursor.rowcount
                 cursor.close()
-                conn.close()
                 return [TextContent(type="text", text=f"Query executed successfully. Rows affected: {affected_rows}")]
                     
         except Exception as e:
@@ -454,19 +652,8 @@ async def main():
     logger.info(f"Authentication method: {config['auth_method']}")
     logger.info(f"Database config: {config['server']}/{config['database']}")
     
-    # Test connection on startup
-    try:
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT @@VERSION, DB_NAME(), SYSTEM_USER")
-        result = cursor.fetchone()
-        logger.info(f"✅ Connection test successful!")
-        logger.info(f"Connected to: {result[1]} as {result[2]}")
-        cursor.close()
-        conn.close()
-    except Exception as e:
-        logger.error(f"❌ Database connection test failed: {e}")
-        raise
+    # Connection will be created and cached on first use
+    logger.info("✅ MCP server initialized. Connection will be established on first request.")
     
     async with stdio_server() as (read_stream, write_stream):
         try:

@@ -167,6 +167,8 @@ test_correct_connection.py
 quick_test.py
 test_mcp_tools.py
 debug_*.py
+test_scope_fix.py
+test_your_entra_config.py
 
 # Virtual environment
 .venv/
