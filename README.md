@@ -80,7 +80,19 @@ pip install azure-identity azure-core pyodbc
 
 ### Authentication Methods
 
-#### 1. Service Principal Authentication
+#### 1. Windows Authentication (Trusted Connection)
+
+For on-premises SQL Server on domain-joined Windows machines:
+
+```bash
+export MSSQL_AUTH_METHOD="windows"
+export MSSQL_SERVER="your-server\INSTANCE"  # or just "your-server"
+export MSSQL_DATABASE="your_database"
+```
+
+**Note:** Uses the currently logged-in Windows user credentials. No username/password required.
+
+#### 2. Service Principal Authentication
 
 Recommended for applications and automation:
 
@@ -92,7 +104,7 @@ export MSSQL_CLIENT_SECRET="your-app-client-secret"
 export MSSQL_DATABASE="your_database"
 ```
 
-#### 2. Managed Identity Authentication
+#### 3. Managed Identity Authentication
 
 For Azure VMs, Container Instances, App Service:
 
@@ -109,7 +121,7 @@ export MSSQL_SERVER="your-server.database.windows.net,1433"
 export MSSQL_DATABASE="your_database"
 ```
 
-#### 3. Interactive/Default Authentication
+#### 4. Interactive/Default Authentication
 
 Uses DefaultAzureCredential chain (recommended for development):
 
@@ -119,7 +131,7 @@ export MSSQL_SERVER="your-server.database.windows.net,1433"
 export MSSQL_DATABASE="your_database"
 ```
 
-#### 4. Entra ID Password Authentication
+#### 5. Entra ID Password Authentication
 
 For user credentials with Entra ID:
 
@@ -131,9 +143,9 @@ export MSSQL_PASSWORD="your_entra_password"
 export MSSQL_DATABASE="your_database"
 ```
 
-#### 5. Integrated Authentication
+#### 6. Entra ID Integrated Authentication
 
-For domain-joined Windows machines:
+For domain-joined Windows machines connecting to Azure SQL:
 
 ```bash
 export MSSQL_AUTH_METHOD="entra_integrated"
@@ -148,7 +160,27 @@ export MSSQL_DATABASE="your_database"
 python src/mssql_mcp_server/server_enhanced.py
 ```
 
-### Claude Desktop Configuration for Entra ID
+### Claude Desktop Configuration Examples
+
+#### Windows Authentication (On-Premises)
+
+```json
+{
+  "mcpServers": {
+    "mssql": {
+      "command": "python",
+      "args": ["C:\\path\\to\\mssql_mcp_server\\src\\mssql_mcp_server\\server_enhanced.py"],
+      "env": {
+        "MSSQL_AUTH_METHOD": "windows",
+        "MSSQL_SERVER": "your-server\\SQLEXPRESS",
+        "MSSQL_DATABASE": "your_database"
+      }
+    }
+  }
+}
+```
+
+#### Entra ID Service Principal (Azure SQL)
 
 ```json
 {

@@ -35,6 +35,7 @@ logger = logging.getLogger("mssql_mcp_server_enhanced")
 class AuthenticationMethod:
     """Authentication method constants."""
     SQL = "sql"
+    WINDOWS = "windows"
     ENTRA_INTEGRATED = "entra_integrated"
     ENTRA_PASSWORD = "entra_password"
     ENTRA_SERVICE_PRINCIPAL = "entra_service_principal"
@@ -89,7 +90,11 @@ def get_db_config() -> Dict[str, Any]:
     elif auth_method == AuthenticationMethod.ENTRA_MANAGED_IDENTITY:
         # client_id is optional for user-assigned managed identity
         pass
-    
+
+    elif auth_method == AuthenticationMethod.WINDOWS:
+        # Windows Authentication requires no additional credentials
+        pass
+
     elif auth_method not in [AuthenticationMethod.ENTRA_INTEGRATED, AuthenticationMethod.ENTRA_INTERACTIVE]:
         logger.error(f"Unsupported authentication method: {auth_method}")
         raise ValueError(f"Unsupported authentication method: {auth_method}")
@@ -106,8 +111,21 @@ PWD={config["password"]};
 Encrypt={"yes" if config["encrypt"] else "no"};
 TrustServerCertificate={"yes" if config["trust_server_certificate"] else "no"};
 Connection Timeout={config["connection_timeout"]};'''
-    
+
     logger.info(f"Connecting with SQL Authentication to {config['server']}/{config['database']} as {config['user']}")
+    return pyodbc.connect(conn_string)
+
+def get_windows_auth_connection(config: Dict[str, Any]) -> pyodbc.Connection:
+    """Create connection using Windows Authentication (Trusted Connection)."""
+    conn_string = f'''DRIVER={{ODBC Driver 17 for SQL Server}};
+SERVER={config["server"]};
+DATABASE={config["database"]};
+Trusted_Connection=yes;
+Encrypt={"yes" if config["encrypt"] else "no"};
+TrustServerCertificate={"yes" if config["trust_server_certificate"] else "no"};
+Connection Timeout={config["connection_timeout"]};'''
+
+    logger.info(f"Connecting with Windows Authentication to {config['server']}/{config['database']}")
     return pyodbc.connect(conn_string)
 
 def get_entra_integrated_connection(config: Dict[str, Any]) -> pyodbc.Connection:
@@ -375,10 +393,12 @@ def get_connection() -> pyodbc.Connection:
     """Create database connection based on configured authentication method."""
     config = get_db_config()
     auth_method = config["auth_method"]
-    
+
     try:
         if auth_method == AuthenticationMethod.SQL:
             return get_sql_auth_connection(config)
+        elif auth_method == AuthenticationMethod.WINDOWS:
+            return get_windows_auth_connection(config)
         elif auth_method == AuthenticationMethod.ENTRA_INTEGRATED:
             return get_entra_integrated_connection(config)
         elif auth_method == AuthenticationMethod.ENTRA_PASSWORD:
@@ -391,7 +411,7 @@ def get_connection() -> pyodbc.Connection:
             return get_entra_interactive_connection(config)
         else:
             raise ValueError(f"Unsupported authentication method: {auth_method}")
-    
+
     except Exception as e:
         logger.error(f"Failed to connect using {auth_method} authentication: {e}")
         raise

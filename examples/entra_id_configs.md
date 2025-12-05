@@ -13,7 +13,40 @@ This document provides configuration examples for using the enhanced MSSQL MCP s
 
 ## Configuration Methods
 
-### 1. SQL Server Authentication (Default)
+### 1. Windows Authentication (Trusted Connection)
+
+For on-premises SQL Server on domain-joined Windows machines:
+
+```bash
+export MSSQL_AUTH_METHOD="windows"
+export MSSQL_SERVER="your-server\SQLEXPRESS"  # or just "your-server"
+export MSSQL_DATABASE="your_database"
+```
+
+**Claude Desktop Config:**
+```json
+{
+  "mcpServers": {
+    "mssql": {
+      "command": "python",
+      "args": ["C:\\path\\to\\mssql_mcp_server\\src\\mssql_mcp_server\\server_enhanced.py"],
+      "env": {
+        "MSSQL_AUTH_METHOD": "windows",
+        "MSSQL_SERVER": "your-server\\SQLEXPRESS",
+        "MSSQL_DATABASE": "your_database"
+      }
+    }
+  }
+}
+```
+
+**Note:**
+- Uses the currently logged-in Windows user credentials
+- No username/password required
+- Works with on-premises SQL Server
+- Requires domain-joined Windows machine or local SQL Server authentication
+
+### 2. SQL Server Authentication (Default)
 
 Traditional username/password authentication:
 
@@ -44,7 +77,7 @@ export MSSQL_DATABASE="your_database"
 }
 ```
 
-### 2. Entra ID Password Authentication
+### 3. Entra ID Password Authentication
 
 Username/password with Entra ID:
 
@@ -75,7 +108,7 @@ export MSSQL_DATABASE="your_database"
 }
 ```
 
-### 3. Entra ID Service Principal Authentication
+### 4. Entra ID Service Principal Authentication
 
 Application-based authentication:
 
@@ -107,7 +140,7 @@ export MSSQL_DATABASE="your_database"
 }
 ```
 
-### 4. Entra ID Managed Identity Authentication
+### 5. Entra ID Managed Identity Authentication
 
 For Azure VMs, Container Instances, App Service, etc.:
 
@@ -126,7 +159,7 @@ export MSSQL_CLIENT_ID="user-assigned-identity-client-id"
 export MSSQL_DATABASE="your_database"
 ```
 
-### 5. Entra ID Integrated Authentication
+### 6. Entra ID Integrated Authentication
 
 For domain-joined Windows machines:
 
@@ -136,7 +169,7 @@ export MSSQL_SERVER="your-server.database.windows.net,1433"
 export MSSQL_DATABASE="your_database"
 ```
 
-### 6. Entra ID Interactive/Default Authentication
+### 7. Entra ID Interactive/Default Authentication
 
 Uses DefaultAzureCredential with access token:
 
